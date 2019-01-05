@@ -34,7 +34,9 @@ label {
 	width: 150px;
 	display: inline-block;
 }
-
+.disabled {
+	color: gray;
+}
 code {
 	font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New', monospace;
 }

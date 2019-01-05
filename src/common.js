@@ -1,11 +1,16 @@
 import { call } from 'redux-saga/effects';
 import convert from 'color-convert';
 import { random } from 'node-forge';
+import GPU from 'gpu.js';
 let workers = [];
-export const LINES_PER_WORKER_CALL = 0;
+export const LINES_PER_WORKER_CALL = 50;
 export const MAX_ITERATIONS = 500;
-export const NUM_WORKERS = 8;
-
+export const NUM_WORKERS = 4;
+export const LAMBDAS = [
+	{ name: 'Node JS', value: 'getIterations' },
+	{ name: 'Python 3.7', value: 'getIterationsPython' },
+	{ name: 'Python 3.7/NumPy', value: 'getIterationsNumPy' }
+];
 export function wait(ms) {
 	return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -51,8 +56,8 @@ export function getIterations({ start, stop, width, offsetx, offsety, panx, pany
 	return iterationsArray;
 }
 
-export function getIterationsRemote({ start, stop, width, offsetx, offsety, panx, pany, zoom, maxIterations }) {
-	const FETCH_API = 'https://dj3b3xgmwj.execute-api.us-west-2.amazonaws.com/prod/getIterations';
+export function getIterationsRemote({ lambda, start, stop, width, offsetx, offsety, panx, pany, zoom, maxIterations }) {
+	const FETCH_API = 'https://dj3b3xgmwj.execute-api.us-west-2.amazonaws.com/prod/' + lambda;
 	const resp = fetch(
 		`${FETCH_API}?start=${start}&stop=${stop}&width=${width}&offsetx=${offsetx}&offsety=${offsety}&panx=${panx}&pany=${pany}&zoom=${zoom}&maxIterations=${maxIterations}`
 	);
@@ -135,6 +140,7 @@ export const getWorker = function*(workers) {
 };
 
 export const calculateMandelbrot = (
+	lambda,
 	width,
 	height,
 	panx,
@@ -160,6 +166,7 @@ export const calculateMandelbrot = (
 		currentWorker = createWorker(worker);
 		workers.push(currentWorker);
 		runner(
+			lambda,
 			stop,
 			start,
 			width,
@@ -176,16 +183,75 @@ export const calculateMandelbrot = (
 	}
 };
 
-export const calculateMandelbrotSync = (worker, colorScheme) => (
+export const calculateMandelbrotGPU = async (
+	lambda,
 	width,
 	height,
 	panx,
 	pany,
 	zoom,
 	setData,
-	maxIterations = MAX_ITERATIONS
+	maxIterations = MAX_ITERATIONS,
+	worker,
+	numWorkers,
+	colorScheme
 ) => {
-	const data = getIterations({
+	const gpu = new GPU();
+
+	//.setOutputToTexture(true);
+	const increment = Math.ceil(height / numWorkers) * width;
+	for (let i = 0; i < numWorkers; i++) {
+		let stop = (i + 1) * increment;
+		const start = stop - increment;
+		stop = stop > height * width ? height * width : stop;
+		const doMandelBrot = gpu
+			.createKernel(function(start, width, offsetx, offsety, panx, pany, zoom, maxIterations) {
+				const x = (start + this.thread.x) % width;
+				const y = Math.floor((start + this.thread.x) / width);
+				const x0 = (x + offsetx + panx) / zoom;
+				const y0 = (y + offsety + pany) / zoom;
+
+				let rx = 0;
+				let ry = 0;
+				let iterations = 0;
+				let rxsqr = 0;
+				let rysqr = 0;
+				while (iterations <= maxIterations && rxsqr + rysqr <= 4) {
+					ry = (rx + rx) * ry + y0;
+					rx = rxsqr - rysqr + x0;
+					rysqr = ry * ry;
+					rxsqr = rx * rx;
+					iterations++;
+				}
+
+				return iterations;
+			})
+			.setOutput([stop - start]);
+		const data = doMandelBrot(start, width, -width / 2, -height / 2, panx, pany, zoom, maxIterations);
+		const rgb = [];
+		for (const i in data) {
+			rgb[Number(i) + start] = colorScheme(data[i], maxIterations);
+		}
+		await wait(0);
+		setData(rgb);
+	}
+};
+
+export const calculateMandelbrotSync = async (
+	lambda,
+	width,
+	height,
+	panx,
+	pany,
+	zoom,
+	setData,
+	maxIterations = MAX_ITERATIONS,
+	worker,
+	numWorkers,
+	colorScheme
+) => {
+	const data = await worker({
+		lambda,
 		start: 0,
 		stop: width * height,
 		width: width,
@@ -203,22 +269,28 @@ export const calculateMandelbrotSync = (worker, colorScheme) => (
 	setData(rgb);
 };
 
-export const calculateMandelbrotFeedback = (worker, colorScheme) => async (
+export const calculateMandelbrotFeedback = async (
+	lambda,
 	width,
 	height,
 	panx,
 	pany,
 	zoom,
 	setData,
-	maxIterations = MAX_ITERATIONS
+	maxIterations = MAX_ITERATIONS,
+	worker = getIterations,
+	numWorkers = NUM_WORKERS,
+	colorScheme = rainbowColorScheme,
+	linesPerBatch = LINES_PER_WORKER_CALL
 ) => {
-	const increment = Math.ceil(height / NUM_WORKERS) * width;
-	for (let i = 0; i < NUM_WORKERS; i++) {
+	const increment = Math.ceil(height / numWorkers) * width;
+	for (let i = 0; i < numWorkers; i++) {
 		let stop = (i + 1) * increment;
 		const start = stop - increment;
 		stop = stop > height * width ? height * width : stop;
 
-		const data = getIterations({
+		const data = await worker({
+			lambda,
 			start: start,
 			stop: stop,
 			width: width,
@@ -238,40 +310,66 @@ export const calculateMandelbrotFeedback = (worker, colorScheme) => async (
 	}
 };
 
-export const calculateMandelbrotParallelSync = (worker, colorScheme) => (
+export const calculateMandelbrotParallelSync = (
+	lambda,
 	width,
 	height,
 	panx,
 	pany,
 	zoom,
 	setData,
-	maxIterations = MAX_ITERATIONS
+	maxIterations = MAX_ITERATIONS,
+	worker = getIterations,
+	numWorkers = NUM_WORKERS,
+	colorScheme = rainbowColorScheme,
+	linesPerBatch = LINES_PER_WORKER_CALL
 ) => {
-	const increment = Math.ceil(height / NUM_WORKERS) * width;
-	for (let i = 0; i < NUM_WORKERS; i++) {
+	const increment = Math.ceil(height / numWorkers) * width;
+	for (let i = 0; i < numWorkers; i++) {
 		let stop = (i + 1) * increment;
 		const start = stop - increment;
 		stop = stop > height * width ? height * width : stop;
-		runner2(stop, start, width, height, panx, pany, zoom, setData, colorScheme, maxIterations);
+		runner2(
+			lambda,
+			stop,
+			start,
+			width,
+			worker,
+			height,
+			panx,
+			pany,
+			zoom,
+			setData,
+			colorScheme,
+			maxIterations,
+			linesPerBatch
+		);
 	}
 };
 
 async function runner2(
+	lambda,
 	stop,
 	start,
 	width,
+	currentWorker,
 	height,
 	panx,
 	pany,
 	zoom,
 	setData,
 	colorScheme,
-	maxIterations = MAX_ITERATIONS
+	maxIterations = MAX_ITERATIONS,
+	linesPerBatch = LINES_PER_WORKER_CALL
 ) {
-	const rows = width * LINES_PER_WORKER_CALL;
+	let rows = width * linesPerBatch;
+	if (rows === 0) {
+		rows = stop - start;
+	}
 	for (let inc = 0; inc < stop - start; inc = inc + rows) {
 		const incStop = start + inc + rows;
-		const data = await getIterations({
+		const data = await currentWorker({
+			lambda,
 			start: start + inc,
 			stop: incStop < stop ? incStop : stop,
 			width: width,
@@ -295,6 +393,7 @@ async function runner2(
 	}
 }
 async function runner(
+	lambda,
 	stop,
 	start,
 	width,
@@ -315,6 +414,7 @@ async function runner(
 	for (let inc = 0; inc < stop - start; inc = inc + rows) {
 		const incStop = start + inc + rows;
 		const data = await workerWrapper(currentWorker, {
+			lambda,
 			start: start + inc,
 			stop: incStop < stop ? incStop : stop,
 			width: width,
@@ -336,28 +436,22 @@ async function runner(
 }
 
 export function drawData(data, canvas) {
-	const context = canvas.current.getContext('2d');
+	const context = canvas.current.getContext('2d', { alpha: false });
 	context.imageSmoothingEnabled = false;
 	const imagew = canvas.current.width;
-	//const imageh = canvas.current.height;
-	let top = 0;
+	const imageh = canvas.current.height;
+
+	const canvas2 = document.createElement('canvas');
+	canvas2.width = canvas.current.width + 'px';
+	canvas2.height = canvas.current.height + 'px';
+	const imagedata = context.getImageData(0, 0, imagew, imageh);
 	for (const i in data) {
-		top = Number(i) / imagew;
-		break;
-	}
-	let bottom = data.length / imagew;
-	//console.log('top', top, 'bottom', bottom);
-	const imagedata = context.createImageData(imagew, bottom - top);
-	//	const imagedata = context.getImageData(0, 0, imagew, imageh);
-	let index = 0;
-	for (const i in data) {
-		//let index = Number(i) * 4;
+		let index = Number(i) * 4;
 		const [r, g, b] = data[i];
 		imagedata.data[index++] = r;
 		imagedata.data[index++] = g;
 		imagedata.data[index++] = b;
 		imagedata.data[index++] = 255;
 	}
-	context.putImageData(imagedata, 0, top);
-	//	context.putImageData(imagedata, 0, 0);
+	context.putImageData(imagedata, 0, 0);
 }
