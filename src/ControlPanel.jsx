@@ -1,8 +1,8 @@
 import React from 'react';
 import { LAMBDAS } from './common';
 
-const showRemote = [true, true, true, false, true];
-const showLines = [false, false, true, false, true];
+const showRemote = [true, true, false, true];
+const showLines = [false, false, false, true];
 
 export const ControlPanel = ({
 	maxIterations,
@@ -82,6 +82,7 @@ export const ControlPanel = ({
 						<option value="16">16</option>
 						<option value="32">32</option>
 						<option value="64">64</option>
+						<option value="128">128</option>
 					</select>
 				</span>
 			</div>
@@ -90,14 +91,13 @@ export const ControlPanel = ({
 				<span>
 					<select value={method} onChange={event => setMethod(Number(event.target.value))}>
 						<option value="0">Single Threaded</option>
-						<option value="1">Single Threaded with Feedback</option>
-						<option value="2">Cooperative Threaded</option>
-						<option value="3">GPU</option>
-						<option value="4">Webworker</option>
+						<option value="1">Batched</option>
+						<option value="2">GPU</option>
+						<option value="3">Webworker</option>
 					</select>
 				</span>
 			</div>
-			<div className="row">
+			<div style={{ display: 'none' }} className="row">
 				<label className={!showLines[method] ? 'disabled' : 'enabled'}>Rows per Batch</label>
 				<span>
 					<select

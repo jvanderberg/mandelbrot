@@ -19,11 +19,12 @@ import {
 	LAMBDAS
 } from './common.js';
 import { ControlPanel } from './ControlPanel.jsx';
-import { SSL_OP_SSLEAY_080_CLIENT_DH_BUG } from 'constants';
 
 function resize(panx, pany, zoom, setWidth, setHeight) {
-	setWidth(window.innerWidth);
-	setHeight(window.innerHeight);
+	unstable_batchedUpdates(() => {
+		setWidth(window.innerWidth);
+		setHeight(window.innerHeight);
+	});
 }
 
 function clickHandler(event, width, height, panx, pany, zoom, setPanx, setPany, setZoom) {
@@ -45,17 +46,14 @@ function clickHandler(event, width, height, panx, pany, zoom, setPanx, setPany, 
 
 const workers = [getIterations, getIterationsRemote];
 const colorSchemes = [rainbowColorScheme, blueColorScheme, blue2ColorScheme];
-const methods = [
-	calculateMandelbrotSync,
-	calculateMandelbrotFeedback,
-	calculateMandelbrotParallelSync,
-	calculateMandelbrotGPU,
-	calculateMandelbrot
-];
+const methods = [calculateMandelbrotSync, calculateMandelbrotFeedback, calculateMandelbrotGPU, calculateMandelbrot];
 
 let start = 0;
 let rows = 0;
-let stop = 0;
+let signal;
+let controller;
+let run = 0;
+
 const MandelBrotContainer = () => {
 	const [lambda, setLambda] = useState(0);
 	const [maxIterations, setMaxIterations] = useState(MAX_ITERATIONS);
@@ -84,14 +82,24 @@ const MandelBrotContainer = () => {
 	});
 	useEffect(
 		() => {
-			const context = canv.current.getContext('2d');
+			//const context = canv.current.getContext('2d');
 
-			context.clearRect(0, 0, canv.current.width, canv.current.height);
+			//context.clearRect(0, 0, canv.current.width, canv.current.height);
 			setData([]);
+			// Creation of an AbortController signal
+			if (controller) {
+				controller.abort();
+			}
+			run++;
+			controller = new AbortController();
+			signal = controller.signal;
+			signal.run = run;
+
 			start = performance.now();
 			setTime(0);
 			rows = 0;
 			methods[method](
+				signal,
 				LAMBDAS[lambda].value,
 				width,
 				height,
