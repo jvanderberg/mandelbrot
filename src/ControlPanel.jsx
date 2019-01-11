@@ -39,11 +39,21 @@ export const ControlPanel = ({
 			<div className="row">
 				<label>Max Iterations</label>
 				<span>
-					<input
-						type="text"
-						value={maxIterations}
-						onChange={event => setMaxIterations(Number(event.target.value))}
-					/>
+					<select value={maxIterations} onChange={event => setMaxIterations(Number(event.target.value))}>
+						<option value="100">100</option>
+						<option value="250">250</option>
+						<option value="500">500</option>
+						<option value="1000">1000</option>
+						<option value="2500">2500</option>
+						<option value="5000">5000</option>
+						<option value="7500">7500</option>
+						<option value="10000">10000</option>
+						<option value="15000">15000</option>
+						<option value="20000">20000</option>
+						<option value="30000">30000</option>
+						<option value="40000">40000</option>
+						<option value="50000">50000</option>
+					</select>
 				</span>
 			</div>
 			<div className="row">
