@@ -1,22 +1,34 @@
 import React from 'react';
 import { LAMBDAS } from './common';
 
-const showRemote = [true, true, false, true];
-const showLines = [false, false, false, true];
+function dlCanvas() {
+	const canvas = document.getElementById('mainCanvas');
+	const link = document.getElementById('download');
+	let dt = canvas.toDataURL('image/png');
+	dt = dt.replace(/data:image\/png;base64,/, '');
+	const binStr = atob(dt);
+	const len = binStr.length;
+	const arr = new Uint8Array(len);
+
+	for (var i = 0; i < len; i++) {
+		arr[i] = binStr.charCodeAt(i);
+	}
+	var blob = new Blob([arr], { type: 'image/png' });
+	link.href = window.URL.createObjectURL(blob);
+	link.download = 'capture.png';
+}
 
 export const ControlPanel = ({
 	maxIterations,
 	setMaxIterations,
-	method,
+	parallel,
 	worker,
 	setWorker,
 	colorScheme,
 	setColorScheme,
 	numWorkers,
 	setNumWorkers,
-	setMethod,
-	linesPerBatch,
-	setLinesPerBatch,
+	setParallel,
 	lambda,
 	setLambda,
 	rows,
@@ -35,21 +47,30 @@ export const ControlPanel = ({
 				</span>
 			</div>
 			<div className="row">
-				<label for="remoteCheckbox" className={!showRemote[method] ? 'disabled' : 'enabled'}>
-					Remote
-				</label>
+				<label>Calc Location</label>
+				<span>
+					<select value={worker} onChange={event => setWorker(Number(event.target.value))}>
+						<option value="0">Local</option>
+						<option value="1">Remote</option>
+						<option value="2">GPU</option>
+					</select>
+				</span>
+			</div>
+			<div className="row">
+				<label className={worker === 2 ? 'disabled' : 'enabled'}>Parallel</label>
 				<span>
 					<input
-						id="remoteCheckbox"
-						disabled={!showRemote[method]}
+						id="parallelCheckbox"
+						disabled={worker === 2}
 						type="checkbox"
-						checked={worker === 1}
+						checked={parallel === 1}
 						onChange={event => {
-							setWorker(event.target.checked === true ? 1 : 0);
+							setParallel(event.target.checked ? 1 : 0);
 						}}
 					/>
 				</span>
 			</div>
+
 			<div className="row">
 				<label className={worker === 0 ? 'disabled' : 'enabled'}>Remote Lambda</label>
 				<span>
@@ -86,38 +107,17 @@ export const ControlPanel = ({
 					</select>
 				</span>
 			</div>
-			<div className="row">
-				<label>Method</label>
-				<span>
-					<select value={method} onChange={event => setMethod(Number(event.target.value))}>
-						<option value="0">Single Threaded</option>
-						<option value="1">Batched</option>
-						<option value="2">GPU</option>
-						<option value="3">Webworker</option>
-					</select>
-				</span>
-			</div>
-			<div style={{ display: 'none' }} className="row">
-				<label className={!showLines[method] ? 'disabled' : 'enabled'}>Rows per Batch</label>
-				<span>
-					<select
-						disabled={!showLines[method]}
-						value={linesPerBatch}
-						onChange={event => setLinesPerBatch(Number(event.target.value))}
-					>
-						<option value="50">50</option>
-						<option value="25">25</option>
-						<option value="10">10</option>
-						<option value="1">1</option>
-						<option value="0">All</option>
-					</select>
-				</span>
-			</div>
+
 			<div className="row">
 				<label>Rows/Time</label>
 				<span>
 					{rows} / {(time / 10).toFixed(0) / 100}
 				</span>
+			</div>
+			<div className="row">
+				<a onClick={() => dlCanvas()} id="download" href="blank">
+					Download Image
+				</a>
 			</div>
 		</div>
 	</div>

@@ -4,7 +4,7 @@ import GPU from 'gpu.js';
 let workers = [];
 export const LINES_PER_WORKER_CALL = 50;
 export const MAX_ITERATIONS = 500;
-export const NUM_WORKERS = 4;
+export const NUM_WORKERS = 1;
 export const LAMBDAS = [
 	{ name: 'Node JS', value: 'getIterations' },
 	{ name: 'Python 3.7', value: 'getIterationsPython' },
@@ -14,7 +14,7 @@ export function wait(ms) {
 	return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function createWorker(fn, index) {
+function createWorker(fn) {
 	const func = `function (event) {
 		const getIterations = ${fn.toString()};
 		const getter = async function() {
@@ -55,6 +55,46 @@ export function getIterations({ start, stop, width, offsetx, offsety, panx, pany
 	return iterationsArray;
 }
 
+export function getIterationsGPU({
+	signal,
+	lambda,
+	start,
+	stop,
+	width,
+	offsetx,
+	offsety,
+	panx,
+	pany,
+	zoom,
+	maxIterations
+}) {
+	const gpu = new GPU();
+	const doMandelBrot = gpu
+		.createKernel(function(start, width, offsetx, offsety, panx, pany, zoom, maxIterations) {
+			const x = (start + this.thread.x) % width;
+			const y = Math.floor((start + this.thread.x) / width);
+			const x0 = (x + offsetx + panx) / zoom;
+			const y0 = (y + offsety + pany) / zoom;
+
+			let rx = 0;
+			let ry = 0;
+			let iterations = 0;
+			let rxsqr = 0;
+			let rysqr = 0;
+			while (iterations <= maxIterations && rxsqr + rysqr <= 4) {
+				ry = (rx + rx) * ry + y0;
+				rx = rxsqr - rysqr + x0;
+				rysqr = ry * ry;
+				rxsqr = rx * rx;
+				iterations++;
+			}
+
+			return iterations;
+		})
+		.setOutput([stop - start]);
+	return doMandelBrot(start, width, offsetx, offsety, panx, pany, zoom, maxIterations);
+}
+
 export function getIterationsRemote({
 	signal,
 	lambda,
@@ -88,33 +128,16 @@ export function getIterationsRemote({
 
 export const workerWrapper = (worker, signal) => {
 	let promise;
-	// if (signal.aborted) {
-	// 	promise = Promise.reject(new DOMException('Aborted', 'AbortError'));
-	// } else {
 	promise = new Promise((resolve, reject) => {
-		// const handleAbort = () => {
-		// 	console.log('Rejecting run #', signal.run);
-		// 	reject(new DOMException('Aborted', 'AbortError'));
-		// 	worker.terminate();
-		// 	worker.terminated = true;
-		// };
 		worker.onmessage = data => {
 			worker.inflight = false;
-			// signal.removeEventListener('abort', handleAbort);
-			if (!signal.aborted) {
-				resolve(data.data);
-			} else {
-				console.log('Ignoring because abort run #', signal.run);
-			}
+			resolve(data.data);
 		};
 		worker.onerror = error => {
 			worker.inflight = false;
-			// signal.removeEventListener('abort', handleAbort);
 			reject(error);
 		};
-		// signal.addEventListener('abort', handleAbort);
 	});
-	// }
 	return parms => {
 		delete parms.signal;
 		worker.postMessage(parms);
@@ -158,6 +181,7 @@ export const blue2ColorScheme = maxIterations => {
 };
 
 export const calculateMandelbrot = async (
+	parallel,
 	signal,
 	lambda,
 	width,
@@ -174,150 +198,24 @@ export const calculateMandelbrot = async (
 ) => {
 	workers.map(worker => worker.terminate());
 	workers = [];
+	let thisWorker = worker;
 	const increment = Math.ceil(height / numWorkers) * width;
-	let currentWorker;
 	for (let i = 0; i < numWorkers; i++) {
 		let stop = (i + 1) * increment;
 		const start = stop - increment;
 		stop = stop > height * width ? height * width : stop;
-		//Create a new worker, this is expensive, we could pool them.
-		currentWorker = createWorker(worker, i);
-		workers.push(currentWorker);
+		if (parallel) {
+			const currentWorker = createWorker(worker);
+			workers.push(currentWorker);
+			thisWorker = workerWrapper(currentWorker, signal);
+		}
 		runner(
 			signal,
 			lambda,
 			stop,
 			start,
 			width,
-			workerWrapper(currentWorker, signal),
-			height,
-			panx,
-			pany,
-			zoom,
-			setData,
-			colorScheme,
-			maxIterations,
-			linesPerBatch
-		);
-		await wait(0);
-	}
-};
-
-export const calculateMandelbrotGPU = async (
-	signal,
-	lambda,
-	width,
-	height,
-	panx,
-	pany,
-	zoom,
-	setData,
-	maxIterations = MAX_ITERATIONS,
-	worker,
-	numWorkers,
-	colorScheme
-) => {
-	const gpu = new GPU();
-
-	const increment = Math.ceil(height / numWorkers) * width;
-	for (let i = 0; i < numWorkers; i++) {
-		let stop = (i + 1) * increment;
-		const start = stop - increment;
-		stop = stop > height * width ? height * width : stop;
-		const doMandelBrot = gpu
-			.createKernel(function(start, width, offsetx, offsety, panx, pany, zoom, maxIterations) {
-				const x = (start + this.thread.x) % width;
-				const y = Math.floor((start + this.thread.x) / width);
-				const x0 = (x + offsetx + panx) / zoom;
-				const y0 = (y + offsety + pany) / zoom;
-
-				let rx = 0;
-				let ry = 0;
-				let iterations = 0;
-				let rxsqr = 0;
-				let rysqr = 0;
-				while (iterations <= maxIterations && rxsqr + rysqr <= 4) {
-					ry = (rx + rx) * ry + y0;
-					rx = rxsqr - rysqr + x0;
-					rysqr = ry * ry;
-					rxsqr = rx * rx;
-					iterations++;
-				}
-
-				return iterations;
-			})
-			.setOutput([stop - start]);
-		const data = doMandelBrot(start, width, -width / 2, -height / 2, panx, pany, zoom, maxIterations);
-		const rgb = [];
-		for (const i in data) {
-			rgb[Number(i) + start] = colorScheme(data[i], maxIterations);
-		}
-		await wait(0);
-		setData(rgb);
-	}
-};
-
-export const calculateMandelbrotSync = async (
-	signal,
-	lambda,
-	width,
-	height,
-	panx,
-	pany,
-	zoom,
-	setData,
-	maxIterations = MAX_ITERATIONS,
-	worker = getIterations,
-	numWorkers = NUM_WORKERS,
-	colorScheme = random,
-	linesPerBatch = LINES_PER_WORKER_CALL
-) => {
-	runner(
-		signal,
-		lambda,
-		width * height,
-		0,
-		width,
-		worker,
-		height,
-		panx,
-		pany,
-		zoom,
-		setData,
-		colorScheme,
-		maxIterations,
-		linesPerBatch
-	);
-};
-
-export const calculateMandelbrotFeedback = async (
-	signal,
-	lambda,
-	width,
-	height,
-	panx,
-	pany,
-	zoom,
-	setData,
-	maxIterations = MAX_ITERATIONS,
-	worker = getIterations,
-	numWorkers = NUM_WORKERS,
-	colorScheme = rainbowColorScheme,
-	linesPerBatch = LINES_PER_WORKER_CALL
-) => {
-	const increment = Math.ceil(height / numWorkers) * width;
-	for (let i = 0; i < numWorkers; i++) {
-		let stop = (i + 1) * increment;
-		const start = stop - increment;
-		stop = stop > height * width ? height * width : stop;
-
-		await runner(
-			signal,
-			lambda,
-			stop,
-			start,
-			width,
-			worker,
+			thisWorker,
 			height,
 			panx,
 			pany,
@@ -389,12 +287,6 @@ export function drawData(data, canvas) {
 	context.imageSmoothingEnabled = false;
 	const imagew = canvas.current.width;
 	const imageh = canvas.current.height;
-	let top;
-	for (let i in data) {
-		top = i;
-		break;
-	}
-	context.clearRect(0, Number(top), imagew, data.length / imagew);
 	const canvas2 = document.createElement('canvas');
 	canvas2.width = canvas.current.width + 'px';
 	canvas2.height = canvas.current.height + 'px';

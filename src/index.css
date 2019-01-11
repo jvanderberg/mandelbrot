@@ -8,6 +8,18 @@ body {
 	-moz-osx-font-smoothing: grayscale;
 }
 
+input {
+	max-width: 50px;
+}
+a,
+a:visited {
+	color: white;
+	text-decoration-style: dashed;
+}
+
+a:hover {
+	color: lightskyblue;
+}
 #root {
 	width: 100vw;
 	height: 100vh;
