@@ -100,6 +100,7 @@ export const blue2ColorScheme = maxIterations => {
 
 export const calculateMandelbrot = async (
 	signal,
+	runId,
 	width,
 	height,
 	panx,
@@ -153,6 +154,7 @@ export const calculateMandelbrot = async (
 				}
 			}
 			setData({
+				runId,
 				pixels: batchPixels,
 				rowUnits: batchResults.length
 			});

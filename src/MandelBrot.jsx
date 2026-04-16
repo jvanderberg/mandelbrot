@@ -12,7 +12,7 @@ import {
 } from './common.js';
 import { ControlPanel } from './ControlPanel.jsx';
 
-const WHEEL_DEBOUNCE_MS = 50;
+const WHEEL_DEBOUNCE_MS = 10;
 
 function getURLParms() {
 	const parms = new URLSearchParams(window.location.search);
@@ -108,6 +108,11 @@ function panViewByDelta(deltaX, deltaY, panx, pany) {
 	};
 }
 
+function invalidateNextRun(activeRunRef) {
+	activeRunRef.current += 1;
+	return activeRunRef.current;
+}
+
 const colorSchemes = [rainbowColorScheme, blueColorScheme, blue2ColorScheme];
 
 let start = 0;
@@ -142,6 +147,7 @@ const MandelBrotContainer = () => {
 	const [previewVisible, setPreviewVisible] = useState(false);
 	const dragRef = useRef({ active: false, startX: 0, startY: 0 });
 	const [isDragging, setIsDragging] = useState(false);
+	const activeRunRef = useRef(0);
 
 	useEffect(() => {
 		viewRef.current = { width, height, panx, pany, zoom };
@@ -152,6 +158,9 @@ const MandelBrotContainer = () => {
 	}, [previewVisible]);
 
 	useEffect(() => {
+		if (data?.runId !== undefined && data.runId !== activeRunRef.current) {
+			return;
+		}
 		const pixels = data?.pixels ?? data;
 		if (pixels && Object.keys(pixels).length) {
 			rows = rows + (data?.rowUnits ?? Object.keys(pixels).length / width);
@@ -174,6 +183,7 @@ const MandelBrotContainer = () => {
 			controller.abort();
 		}
 		run++;
+		activeRunRef.current = run;
 		controller = new AbortController();
 		signal = controller.signal;
 		signal.run = run;
@@ -184,6 +194,7 @@ const MandelBrotContainer = () => {
 
 		calculateMandelbrot(
 			signal,
+			run,
 			width,
 			height,
 			panx,
@@ -260,6 +271,7 @@ const MandelBrotContainer = () => {
 			if (controller) {
 				controller.abort();
 			}
+			invalidateNextRun(activeRunRef);
 			previewModeRef.current = 'committing';
 			bakePreviewToMainCanvas(canv, previewCanv, previewTransformRef.current);
 			resetPreview(setPreviewTransform, previewTransformRef);
@@ -302,6 +314,7 @@ const MandelBrotContainer = () => {
 				if (controller) {
 					controller.abort();
 				}
+				invalidateNextRun(activeRunRef);
 				previewModeRef.current = 'committing';
 				bakePreviewToMainCanvas(canv, previewCanv, previewTransformRef.current);
 				resetPreview(setPreviewTransform, previewTransformRef);
