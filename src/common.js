@@ -1,6 +1,8 @@
 import convert from 'color-convert';
+const workerUrl = new URL('./mandelbrotWorker.js', import.meta.url);
 
 let workers = [];
+let nextWorkerRequestId = 0;
 
 export const MAX_ITERATIONS = 500;
 export const FIXED_WORKERS = 32;
@@ -10,18 +12,21 @@ export function wait(ms) {
 	return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function createWorker(fn) {
-	const func = `function (event) {
-		const getIterations = ${fn.toString()};
-		const getter = async function() {
-			const results = await getIterations(event.data);
-			postMessage(results);
-		}
-		getter();
-	}`;
-	const blob = new Blob([`self.onmessage = ${func}`], { type: 'text/javascript' });
-	const url = URL.createObjectURL(blob);
-	return new Worker(url);
+function createWorker() {
+	return new Worker(workerUrl, { type: 'module' });
+}
+
+function ensureWorkers() {
+	if (workers.length === FIXED_WORKERS) {
+		return workers;
+	}
+
+	workers.forEach(worker => worker.terminate());
+	workers = [];
+	for (let i = 0; i < FIXED_WORKERS; i++) {
+		workers.push(createWorker());
+	}
+	return workers;
 }
 
 export function getIterationsForLine({ y, width, offsetx, offsety, panx, pany, zoom, maxIterations }) {
@@ -52,15 +57,32 @@ export function getIterationsForLine({ y, width, offsetx, offsety, panx, pany, z
 }
 
 export const workerWrapper = worker => {
+	if (!worker.pendingRequests) {
+		worker.pendingRequests = new Map();
+		worker.onmessage = event => {
+			const { requestId } = event.data ?? {};
+			const pending = worker.pendingRequests.get(requestId);
+			if (!pending) {
+				return;
+			}
+			worker.pendingRequests.delete(requestId);
+			if (event.data?.error) {
+				pending.reject(new Error(event.data.error));
+				return;
+			}
+			pending.resolve(event.data);
+		};
+		worker.onerror = error => {
+			worker.pendingRequests.forEach(({ reject }) => reject(error));
+			worker.pendingRequests.clear();
+		};
+	}
+
 	return parms =>
 		new Promise((resolve, reject) => {
-			worker.onmessage = data => {
-				resolve(data.data);
-			};
-			worker.onerror = error => {
-				reject(error);
-			};
-			worker.postMessage(parms);
+			const requestId = ++nextWorkerRequestId;
+			worker.pendingRequests.set(requestId, { resolve, reject });
+			worker.postMessage({ ...parms, requestId });
 		});
 };
 
@@ -110,15 +132,7 @@ export const calculateMandelbrot = async (
 	maxIterations = MAX_ITERATIONS,
 	colorScheme = () => [0, 0, 0]
 ) => {
-	workers.map(worker => worker.terminate());
-	workers = [];
-
-	const workerFns = [];
-	for (let i = 0; i < FIXED_WORKERS; i++) {
-		const currentWorker = createWorker(getIterationsForLine);
-		workers.push(currentWorker);
-		workerFns.push(workerWrapper(currentWorker));
-	}
+	const workerFns = ensureWorkers().map(workerWrapper);
 
 	for (let phase = 0; phase < ROW_STRIDE; phase++) {
 		const rowJobs = [];
@@ -199,6 +213,13 @@ function mapLineToRgb(data, colorScheme, maxIterations, width, height) {
 		return [];
 	}
 	const rgb = [];
+	if (data?.iterations && data.y !== undefined) {
+		const start = data.y * width;
+		for (let x = 0; x < data.iterations.length; x++) {
+			rgb[start + x] = colorScheme(data.iterations[x], maxIterations);
+		}
+		return rgb;
+	}
 	for (const i in data) {
 		rgb[i] = colorScheme(data[i], maxIterations);
 	}

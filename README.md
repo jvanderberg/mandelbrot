@@ -2,7 +2,7 @@
 
 An interactive Mandelbrot viewer built with Vite and React.
 
-The current renderer is a local CPU path that uses a fixed worker pool and progressive scanline rendering so the image starts appearing quickly while the full frame finishes in the background.
+The current renderer is a local CPU path that uses a fixed worker pool and progressive scanline rendering so the image starts appearing quickly while the full frame finishes in the background. The hot Mandelbrot line kernel is compiled to WebAssembly from Rust and executed inside the workers.
 
 ## Live Site
 
@@ -23,9 +23,10 @@ GitHub Pages:
 ## Renderer Notes
 
 - Rendering is local-only. There is no remote render path in the current UI.
-- The CPU renderer uses:
+- The renderer uses:
   - `32` web workers
   - a scanline stride of `16`
+  - a Rust/WebAssembly line kernel inside the workers
   - progressive row batches so the frame fills in quickly
 
 ## Local Development
@@ -34,11 +35,18 @@ Requirements:
 
 - Node.js 18+
 - npm
+- Rust toolchain with the `wasm32-unknown-unknown` target
 
 Install dependencies:
 
 ```bash
 npm install
+```
+
+Install the wasm target if needed:
+
+```bash
+rustup target add wasm32-unknown-unknown
 ```
 
 Start the dev server:
@@ -76,4 +84,3 @@ The Vite `base` path is set automatically in GitHub Actions so the app serves co
 - [src/MandelBrot.jsx](./src/MandelBrot.jsx): interaction model, viewport state, preview behavior
 - [src/common.js](./src/common.js): CPU worker scheduler and Mandelbrot iteration code
 - [src/ControlPanel.jsx](./src/ControlPanel.jsx): on-screen controls
-

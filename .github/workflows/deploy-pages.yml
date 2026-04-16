@@ -29,6 +29,11 @@ jobs:
           node-version: 20
           cache: npm
 
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
