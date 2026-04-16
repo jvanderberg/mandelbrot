@@ -116,6 +116,7 @@ let signal;
 let controller;
 let run = 0;
 let handlingURLState = false;
+let hasHydratedURL = false;
 
 const def = getURLParms();
 
@@ -194,6 +195,9 @@ const MandelBrotContainer = () => {
 		);
 
 		if (!handlingURLState) {
+			if (!hasHydratedURL) {
+				hasHydratedURL = true;
+			} else {
 			const nextSearch = `?panx=${panx}&pany=${pany}&zoom=${zoom}&maxIterations=${maxIterations}&colorScheme=${colorScheme}`;
 			window.history.pushState(
 				{
@@ -206,6 +210,7 @@ const MandelBrotContainer = () => {
 				'Mandelbrot',
 				`${window.location.pathname}${nextSearch}`
 			);
+			}
 		} else {
 			handlingURLState = false;
 		}
