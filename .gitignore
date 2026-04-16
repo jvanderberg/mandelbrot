@@ -24,4 +24,4 @@ yarn-debug.log*
 yarn-error.log*
 
 rust/mandelbrot-wasm/target
-src/wasm/*.wasm
+public/wasm/*.wasm

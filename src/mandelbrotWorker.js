@@ -1,10 +1,9 @@
-import wasmUrl from './wasm/mandelbrot_wasm.wasm?url';
-
 let wasmInitPromise;
 let wasmExports;
 let scratchPtr = 0;
 let scratchLen = 0;
 const paletteCache = new Map();
+const wasmUrl = new URL('../wasm/mandelbrot_wasm.wasm', self.location.href).href;
 
 function hslToRgb(h, s, l) {
 	const hue = ((h % 360) + 360) % 360;

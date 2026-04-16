@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CRATE_DIR="$ROOT_DIR/rust/mandelbrot-wasm"
-OUT_DIR="$ROOT_DIR/src/wasm"
+OUT_DIR="$ROOT_DIR/public/wasm"
 PROFILE="${1:-release}"
 
 mkdir -p "$OUT_DIR"

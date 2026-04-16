@@ -174,7 +174,12 @@ async function runner(
 	});
 
 	if (data.then && typeof data.then === 'function') {
-		return data.then(newData => normalizeLineBatch(newData, width, height)).catch(err => console.log(err));
+		return data
+			.then(newData => normalizeLineBatch(newData, width, height))
+			.catch(err => {
+				console.error(err);
+				return [];
+			});
 	}
 	return normalizeLineBatch(data, width, height);
 }
@@ -226,6 +231,9 @@ export function drawData(data, canvas) {
 	const { context, imageData } = getCanvasState(canvas);
 	context.imageSmoothingEnabled = false;
 	for (const chunk of chunks) {
+		if (!chunk) {
+			continue;
+		}
 		const lineBytes = imageData.width * 4;
 		for (let lineIndex = 0; lineIndex < chunk.lineCount; lineIndex++) {
 			const targetY = chunk.startY + lineIndex * chunk.lineStep;
