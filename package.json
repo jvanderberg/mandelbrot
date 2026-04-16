@@ -2,31 +2,24 @@
 	"name": "mandelbrot",
 	"version": "0.1.0",
 	"private": true,
+	"type": "module",
 	"dependencies": {
-		"color-convert": "^1.9.3",
-		"gpu.js": "^1.10.4",
-		"prop-types": "^15.6.2",
-		"react": "16.7.0-alpha.2",
-		"react-dom": "16.7.0-alpha.2",
-		"react-redux": "^6.0.0",
-		"react-scripts": "2.1.2",
-		"redux": "^4.0.1",
-		"redux-saga": "^0.16.2",
-		"surge": "^0.20.1"
+		"color-convert": "^2.0.1",
+		"react": "^18.3.1",
+		"react-dom": "^18.3.1"
+	},
+	"devDependencies": {
+		"@vitejs/plugin-react": "^4.3.1",
+		"vite": "^5.4.10"
 	},
 	"scripts": {
-		"start": "react-scripts start",
-		"build": "react-scripts build",
-		"test": "react-scripts test",
-		"eject": "react-scripts eject"
-	},
-	"eslintConfig": {
-		"extends": "react-app"
+		"dev": "vite",
+		"build": "vite build",
+		"preview": "vite preview"
 	},
 	"browserslist": [
-		">0.2%",
-		"not dead",
-		"not ie <= 11",
-		"not op_mini all"
+		"> 0.5%",
+		"last 2 versions",
+		"not dead"
 	]
 }

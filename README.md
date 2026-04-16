@@ -1,68 +1,79 @@
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+# Mandelbrot Explorer
 
-## Available Scripts
+An interactive Mandelbrot viewer built with Vite and React.
 
-In the project directory, you can run:
+The current renderer is a local CPU path that uses a fixed worker pool and progressive scanline rendering so the image starts appearing quickly while the full frame finishes in the background.
 
-### `npm start`
+## Live Site
 
-Runs the app in the development mode.<br>
-Open [http://localhost:3000](http://localhost:3000) to view it in the browser.
+GitHub Pages:
 
-The page will reload if you make edits.<br>
-You will also see any lint errors in the console.
+`https://jvanderberg.github.io/mandelbrot/`
 
-### `npm test`
+## Controls
 
-Launches the test runner in the interactive watch mode.<br>
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+- Mouse wheel zooms in and out around the cursor.
+- Left-drag pans the current view.
+- URL state is preserved for `panx`, `pany`, `zoom`, `maxIterations`, and `colorScheme`.
+- The control panel lets you change:
+  - max iterations
+  - color scheme
+  - image download
 
-### `npm run build`
+## Renderer Notes
 
-Builds the app for production to the `build` folder.<br>
-It correctly bundles React in production mode and optimizes the build for the best performance.
+- Rendering is local-only. There is no remote render path in the current UI.
+- The CPU renderer uses:
+  - `32` web workers
+  - a scanline stride of `16`
+  - progressive row batches so the frame fills in quickly
 
-The build is minified and the filenames include the hashes.<br>
-Your app is ready to be deployed!
+## Local Development
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+Requirements:
 
-### `npm run eject`
+- Node.js 18+
+- npm
 
-**Note: this is a one-way operation. Once you `eject`, you can’t go back!**
+Install dependencies:
 
-If you aren’t satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+```bash
+npm install
+```
 
-Instead, it will copy all the configuration files and the transitive dependencies (Webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you’re on your own.
+Start the dev server:
 
-You don’t have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn’t feel obligated to use this feature. However we understand that this tool wouldn’t be useful if you couldn’t customize it when you are ready for it.
+```bash
+npm run dev
+```
 
-## Learn More
+Create a production build:
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+```bash
+npm run build
+```
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+Preview the production build locally:
 
-### Code Splitting
+```bash
+npm run preview
+```
 
-This section has moved here: https://facebook.github.io/create-react-app/docs/code-splitting
+## GitHub Pages Deployment
 
-### Analyzing the Bundle Size
+This repo includes a GitHub Actions workflow at [.github/workflows/deploy-pages.yml](./.github/workflows/deploy-pages.yml).
 
-This section has moved here: https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size
+It:
 
-### Making a Progressive Web App
+1. Builds the Vite app on pushes to `master`
+2. Uploads the `dist/` artifact
+3. Deploys it to GitHub Pages
 
-This section has moved here: https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app
+The Vite `base` path is set automatically in GitHub Actions so the app serves correctly from the repository path on Pages.
 
-### Advanced Configuration
+## Project Structure
 
-This section has moved here: https://facebook.github.io/create-react-app/docs/advanced-configuration
+- [src/MandelBrot.jsx](./src/MandelBrot.jsx): interaction model, viewport state, preview behavior
+- [src/common.js](./src/common.js): CPU worker scheduler and Mandelbrot iteration code
+- [src/ControlPanel.jsx](./src/ControlPanel.jsx): on-screen controls
 
-### Deployment
-
-This section has moved here: https://facebook.github.io/create-react-app/docs/deployment
-
-### `npm run build` fails to minify
-
-This section has moved here: https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify
