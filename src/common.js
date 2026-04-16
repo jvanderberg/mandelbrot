@@ -105,14 +105,15 @@ export const calculateMandelbrot = async (
 	const workerFns = ensureWorkers().map(workerWrapper);
 
 	for (let phase = 0; phase < ROW_STRIDE; phase++) {
-		const rowJobs = [];
-		for (let y = phase; y < height; y += ROW_STRIDE) {
-			rowJobs.push(y);
-		}
-
 		const jobs = [];
-		for (let i = 0; i < rowJobs.length; i += LINES_PER_WORKER_REQUEST) {
-			jobs.push({ ys: rowJobs.slice(i, i + LINES_PER_WORKER_REQUEST) });
+		for (let y = phase; y < height; y += ROW_STRIDE * LINES_PER_WORKER_REQUEST) {
+			const remaining = height - y;
+			const lineCount = Math.min(LINES_PER_WORKER_REQUEST, Math.ceil(remaining / ROW_STRIDE));
+			jobs.push({
+				startY: y,
+				lineCount,
+				lineStep: ROW_STRIDE
+			});
 		}
 
 		for (let i = 0; i < jobs.length; i += FIXED_WORKERS) {
@@ -121,7 +122,7 @@ export const calculateMandelbrot = async (
 				batch.map((job, index) =>
 					runner(
 						signal,
-						job.ys,
+						job,
 						width,
 						workerFns[index],
 						height,
@@ -138,8 +139,8 @@ export const calculateMandelbrot = async (
 			}
 			setData({
 				runId,
-				lines: batchResults.flat(),
-				rowUnits: batch.reduce((count, job) => count + job.ys.length, 0)
+				chunks: batchResults.flat(),
+				rowUnits: batch.reduce((count, job) => count + job.lineCount, 0)
 			});
 			await wait(0);
 		}
@@ -148,7 +149,7 @@ export const calculateMandelbrot = async (
 
 async function runner(
 	signal,
-	ys,
+	job,
 	width,
 	worker,
 	height,
@@ -159,7 +160,9 @@ async function runner(
 	maxIterations = MAX_ITERATIONS
 ) {
 	const data = worker({
-		ys,
+		startY: job.startY,
+		lineCount: job.lineCount,
+		lineStep: job.lineStep,
 		width,
 		offsetx: -width / 2,
 		offsety: -height / 2,
@@ -180,7 +183,7 @@ function normalizeLineBatch(data, width, height) {
 	if (window.innerHeight !== height || window.innerWidth !== width) {
 		return [];
 	}
-	return data?.lines ?? [];
+	return data?.chunk ? [data.chunk] : [];
 }
 
 function getCanvasState(canvasRef) {
@@ -219,11 +222,17 @@ export function syncDrawBufferFromCanvas(canvasRef) {
 }
 
 export function drawData(data, canvas) {
-	const lines = data.lines ?? [];
+	const chunks = data.chunks ?? [];
 	const { context, imageData } = getCanvasState(canvas);
 	context.imageSmoothingEnabled = false;
-	for (const line of lines) {
-		imageData.data.set(line.rgba, line.y * imageData.width * 4);
+	for (const chunk of chunks) {
+		const lineBytes = imageData.width * 4;
+		for (let lineIndex = 0; lineIndex < chunk.lineCount; lineIndex++) {
+			const targetY = chunk.startY + lineIndex * chunk.lineStep;
+			const sourceStart = lineIndex * lineBytes;
+			const sourceEnd = sourceStart + lineBytes;
+			imageData.data.set(chunk.rgba.subarray(sourceStart, sourceEnd), targetY * lineBytes);
+		}
 	}
 	context.putImageData(imageData, 0, 0);
 }

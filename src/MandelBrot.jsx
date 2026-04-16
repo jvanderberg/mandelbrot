@@ -155,9 +155,9 @@ const MandelBrotContainer = () => {
 		if (data?.runId !== undefined && data.runId !== activeRunRef.current) {
 			return;
 		}
-		const lines = data?.lines ?? [];
-		if (lines.length) {
-			rows = rows + (data?.rowUnits ?? lines.length);
+		const chunks = data?.chunks ?? [];
+		if (chunks.length) {
+			rows = rows + (data?.rowUnits ?? chunks.reduce((count, chunk) => count + chunk.lineCount, 0));
 			setTime(performance.now() - start);
 			drawData(data, canv);
 			if (previewModeRef.current === 'committing') {

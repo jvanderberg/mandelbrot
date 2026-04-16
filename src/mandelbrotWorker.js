@@ -79,56 +79,6 @@ function getPalette(colorScheme, maxIterations) {
 	return palette;
 }
 
-function colorizeIterations(iterations, colorScheme, maxIterations) {
-	const palette = getPalette(colorScheme, maxIterations);
-	const rgba = new Uint8ClampedArray(iterations.length * 4);
-	for (let x = 0; x < iterations.length; x++) {
-		const paletteIndex = Math.min(iterations[x], maxIterations) * 4;
-		const rgbaIndex = x * 4;
-		rgba[rgbaIndex] = palette[paletteIndex];
-		rgba[rgbaIndex + 1] = palette[paletteIndex + 1];
-		rgba[rgbaIndex + 2] = palette[paletteIndex + 2];
-		rgba[rgbaIndex + 3] = 255;
-	}
-	return rgba;
-}
-
-function getIterationsForLine({ y, width, offsetx, offsety, panx, pany, zoom, maxIterations }) {
-	const iterations = new Uint32Array(width);
-	const y0 = (y + offsety + pany) / zoom;
-	for (let x = 0; x < width; x++) {
-		const x0 = (x + offsetx + panx) / zoom;
-
-		let rx = 0;
-		let ry = 0;
-		let iteration = 0;
-		let rxsqr = 0;
-		let rysqr = 0;
-		while (iteration <= maxIterations && rxsqr + rysqr <= 4) {
-			ry = (rx + rx) * ry + y0;
-			rx = rxsqr - rysqr + x0;
-			rysqr = ry * ry;
-			rxsqr = rx * rx;
-			iteration++;
-		}
-
-		iterations[x] = iteration;
-	}
-	return { y, iterations };
-}
-
-function getColorizedLinesFromJs(params) {
-	return {
-		lines: params.ys.map(y => {
-			const line = getIterationsForLine({ ...params, y });
-			return {
-				y,
-				rgba: colorizeIterations(line.iterations, params.colorScheme, params.maxIterations)
-			};
-		})
-	};
-}
-
 async function initWasm() {
 	if (!wasmInitPromise) {
 		wasmInitPromise = (async () => {
@@ -151,55 +101,102 @@ async function initWasm() {
 	return wasmInitPromise;
 }
 
-function ensureScratchBuffer(wasm, width) {
-	if (scratchLen >= width) {
+function ensureScratchBuffer(wasm, byteLength) {
+	if (scratchLen >= byteLength) {
 		return scratchPtr;
 	}
 	if (scratchPtr) {
-		wasm.dealloc_u32(scratchPtr, scratchLen);
+		wasm.dealloc_u8(scratchPtr, scratchLen);
 	}
-	scratchPtr = wasm.alloc_u32(width);
-	scratchLen = width;
+	scratchPtr = wasm.alloc_u8(byteLength);
+	scratchLen = byteLength;
 	return scratchPtr;
 }
 
-async function computeLines(params) {
+function renderChunkInJs(params) {
+	const rgba = new Uint8ClampedArray(params.width * params.lineCount * 4);
+	const dx = 1 / params.zoom;
+	const lineBytes = params.width * 4;
+	const palette = getPalette(params.colorScheme, params.maxIterations);
+
+	for (let lineIndex = 0; lineIndex < params.lineCount; lineIndex++) {
+		const y = params.startY + lineIndex * params.lineStep;
+		const y0 = (y + params.offsety + params.pany) / params.zoom;
+		let x0 = (params.offsetx + params.panx) / params.zoom;
+		let rowOffset = lineIndex * lineBytes;
+
+		for (let x = 0; x < params.width; x++) {
+			let rx = 0;
+			let ry = 0;
+			let iteration = 0;
+			let rxsqr = 0;
+			let rysqr = 0;
+			while (iteration <= params.maxIterations && rxsqr + rysqr <= 4) {
+				ry = (rx + rx) * ry + y0;
+				rx = rxsqr - rysqr + x0;
+				rysqr = ry * ry;
+				rxsqr = rx * rx;
+				iteration++;
+			}
+
+			const paletteIndex = Math.min(iteration, params.maxIterations) * 4;
+			rgba[rowOffset++] = palette[paletteIndex];
+			rgba[rowOffset++] = palette[paletteIndex + 1];
+			rgba[rowOffset++] = palette[paletteIndex + 2];
+			rgba[rowOffset++] = 255;
+			x0 += dx;
+		}
+	}
+
+	return {
+		chunk: {
+			startY: params.startY,
+			lineCount: params.lineCount,
+			lineStep: params.lineStep,
+			rgba
+		}
+	};
+}
+
+async function computeChunk(params) {
 	try {
 		wasmExports = wasmExports ?? (await initWasm());
-		const ptr = ensureScratchBuffer(wasmExports, params.width);
-		const lines = params.ys.map(y => {
-			wasmExports.render_line(
-				y,
-				params.width,
-				params.offsetx,
-				params.offsety,
-				params.panx,
-				params.pany,
-				params.zoom,
-				params.maxIterations,
-				ptr
-			);
-			const iterations = new Uint32Array(wasmExports.memory.buffer, ptr, params.width);
-			return {
-				y,
-				rgba: colorizeIterations(iterations, params.colorScheme, params.maxIterations)
-			};
-		});
-		return { lines };
+		const byteLength = params.width * params.lineCount * 4;
+		const ptr = ensureScratchBuffer(wasmExports, byteLength);
+		wasmExports.render_lines_rgba(
+			params.startY,
+			params.lineCount,
+			params.lineStep,
+			params.width,
+			params.offsetx,
+			params.offsety,
+			params.panx,
+			params.pany,
+			params.zoom,
+			params.maxIterations,
+			params.colorScheme,
+			ptr
+		);
+		const rgba = new Uint8ClampedArray(wasmExports.memory.buffer, ptr, byteLength).slice();
+		return {
+			chunk: {
+				startY: params.startY,
+				lineCount: params.lineCount,
+				lineStep: params.lineStep,
+				rgba
+			}
+		};
 	} catch (error) {
 		console.warn('WASM line kernel unavailable, falling back to JS worker path.', error);
-		return getColorizedLinesFromJs(params);
+		return renderChunkInJs(params);
 	}
 }
 
 self.onmessage = async event => {
 	const { requestId, ...params } = event.data;
 	try {
-		const result = await computeLines(params);
-		self.postMessage(
-			{ requestId, ...result },
-			result.lines.map(line => line.rgba.buffer)
-		);
+		const result = await computeChunk(params);
+		self.postMessage({ requestId, ...result }, [result.chunk.rgba.buffer]);
 	} catch (error) {
 		self.postMessage({
 			requestId,
