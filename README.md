@@ -6,9 +6,7 @@ The current renderer is a local CPU path that uses a fixed worker pool and progr
 
 ## Live Site
 
-GitHub Pages:
-
-`https://jvanderberg.github.io/mandelbrot/`
+[Open the live Mandelbrot Explorer](https://jvanderberg.github.io/mandelbrot/)
 
 ## Controls
 
@@ -24,9 +22,9 @@ GitHub Pages:
 
 - Rendering is local-only. There is no remote render path in the current UI.
 - The renderer uses:
-  - `32` web workers
+  - a worker pool sized from `navigator.hardwareConcurrency`, capped at the render stride
   - a scanline stride of `16`
-  - a Rust/WebAssembly line kernel inside the workers
+  - a Rust/WebAssembly batched RGBA renderer inside the workers
   - progressive row batches so the frame fills in quickly
 
 ## Local Development
