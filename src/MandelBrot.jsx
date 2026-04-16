@@ -194,6 +194,7 @@ const MandelBrotContainer = () => {
 		);
 
 		if (!handlingURLState) {
+			const nextSearch = `?panx=${panx}&pany=${pany}&zoom=${zoom}&maxIterations=${maxIterations}&colorScheme=${colorScheme}`;
 			window.history.pushState(
 				{
 					panx,
@@ -203,7 +204,7 @@ const MandelBrotContainer = () => {
 					colorScheme
 				},
 				'Mandelbrot',
-				`/?panx=${panx}&pany=${pany}&zoom=${zoom}&maxIterations=${maxIterations}&colorScheme=${colorScheme}`
+				`${window.location.pathname}${nextSearch}`
 			);
 		} else {
 			handlingURLState = false;
