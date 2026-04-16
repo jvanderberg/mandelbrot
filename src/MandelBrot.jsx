@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { unstable_batchedUpdates } from 'react-dom';
+import { useGesture } from '@use-gesture/react';
 import {
 	MAX_ITERATIONS,
 	calculateMandelbrot,
@@ -9,6 +10,17 @@ import {
 import { ControlPanel } from './ControlPanel.jsx';
 
 const WHEEL_DEBOUNCE_MS = 10;
+const URL_UPDATE_DEBOUNCE_MS = 300;
+const PINCH_ZOOM_IN_DAMPING = 0.45;
+const PINCH_ZOOM_OUT_DAMPING = 0.85;
+
+function getViewportSize() {
+	const viewport = window.visualViewport;
+	return {
+		width: Math.round(viewport?.width ?? window.innerWidth),
+		height: Math.round(viewport?.height ?? window.innerHeight)
+	};
+}
 
 function getURLParms() {
 	const parms = new URLSearchParams(window.location.search);
@@ -27,9 +39,10 @@ function getURLParms() {
 }
 
 function resize(setWidth, setHeight) {
+	const viewport = getViewportSize();
 	unstable_batchedUpdates(() => {
-		setWidth(window.innerWidth);
-		setHeight(window.innerHeight);
+		setWidth(viewport.width);
+		setHeight(viewport.height);
 	});
 }
 
@@ -91,10 +104,18 @@ function bakePreviewToMainCanvas(mainCanvasRef, previewCanvasRef, previewTransfo
 	context.restore();
 }
 
-function resetPreview(setPreviewTransform, previewTransformRef) {
+function applyPreviewTransform(previewCanvasRef, previewTransform) {
+	const previewCanvas = previewCanvasRef.current;
+	if (!previewCanvas) {
+		return;
+	}
+	previewCanvas.style.transform = `matrix(${previewTransform.scale}, 0, 0, ${previewTransform.scale}, ${previewTransform.translateX}, ${previewTransform.translateY})`;
+}
+
+function resetPreview(previewCanvasRef, previewTransformRef) {
 	const identity = { scale: 1, translateX: 0, translateY: 0 };
 	previewTransformRef.current = identity;
-	setPreviewTransform(identity);
+	applyPreviewTransform(previewCanvasRef, identity);
 }
 
 function panViewByDelta(deltaX, deltaY, panx, pany) {
@@ -107,6 +128,14 @@ function panViewByDelta(deltaX, deltaY, panx, pany) {
 function invalidateNextRun(activeRunRef) {
 	activeRunRef.current += 1;
 	return activeRunRef.current;
+}
+
+function defaultView() {
+	return {
+		zoom: 200,
+		panx: 0,
+		pany: 0
+	};
 }
 
 let start = 0;
@@ -122,8 +151,9 @@ const def = getURLParms();
 const MandelBrotContainer = () => {
 	const [maxIterations, setMaxIterations] = useState(def.maxIterations);
 	const [data, setData] = useState([]);
-	const [width, setWidth] = useState(window.innerWidth);
-	const [height, setHeight] = useState(window.innerHeight);
+	const initialViewport = getViewportSize();
+	const [width, setWidth] = useState(initialViewport.width);
+	const [height, setHeight] = useState(initialViewport.height);
 	const [zoom, setZoom] = useState(def.zoom);
 	const [panx, setPanx] = useState(def.panx);
 	const [pany, setPany] = useState(def.pany);
@@ -131,17 +161,22 @@ const MandelBrotContainer = () => {
 	const [time, setTime] = useState(0);
 	const canv = useRef(null);
 	const previewCanv = useRef(null);
+	const gestureSurface = useRef(null);
 	const viewRef = useRef({ width, height, panx, pany, zoom });
 	const wheelTimeout = useRef();
+	const urlStateTimeout = useRef();
 	const pendingView = useRef(null);
 	const previewModeRef = useRef('idle');
 	const previewVisibleRef = useRef(false);
 	const previewTransformRef = useRef({ scale: 1, translateX: 0, translateY: 0 });
-	const [previewTransform, setPreviewTransform] = useState({ scale: 1, translateX: 0, translateY: 0 });
 	const [previewVisible, setPreviewVisible] = useState(false);
-	const dragRef = useRef({ active: false, startX: 0, startY: 0 });
 	const [isDragging, setIsDragging] = useState(false);
 	const activeRunRef = useRef(0);
+	const activeGestureRef = useRef('none');
+	const pinchBaselineRef = useRef(0);
+	const pendingChunksRef = useRef([]);
+	const pendingRowUnitsRef = useRef(0);
+	const drawFlushRef = useRef(0);
 
 	useEffect(() => {
 		viewRef.current = { width, height, panx, pany, zoom };
@@ -155,6 +190,9 @@ const MandelBrotContainer = () => {
 		if (data?.runId !== undefined && data.runId !== activeRunRef.current) {
 			return;
 		}
+		if (previewModeRef.current === 'interactive') {
+			return;
+		}
 		const chunks = data?.chunks ?? [];
 		if (chunks.length) {
 			rows =
@@ -166,7 +204,7 @@ const MandelBrotContainer = () => {
 			if (previewModeRef.current === 'committing') {
 				previewModeRef.current = 'idle';
 				pendingView.current = null;
-				resetPreview(setPreviewTransform, previewTransformRef);
+				resetPreview(previewCanv, previewTransformRef);
 				setPreviewVisible(false);
 			}
 		}
@@ -186,6 +224,39 @@ const MandelBrotContainer = () => {
 		start = performance.now();
 		setTime(0);
 		rows = 0;
+		pendingChunksRef.current = [];
+		pendingRowUnitsRef.current = 0;
+		if (drawFlushRef.current) {
+			window.cancelAnimationFrame(drawFlushRef.current);
+			drawFlushRef.current = 0;
+		}
+
+		const enqueueData = batch => {
+			if (!batch || batch.runId !== activeRunRef.current) {
+				return;
+			}
+			if (batch.chunks?.length) {
+				pendingChunksRef.current.push(...batch.chunks);
+			}
+			pendingRowUnitsRef.current += batch.rowUnits ?? 0;
+			if (drawFlushRef.current) {
+				return;
+			}
+			drawFlushRef.current = window.requestAnimationFrame(() => {
+				drawFlushRef.current = 0;
+				const chunks = pendingChunksRef.current.splice(0);
+				const rowUnits = pendingRowUnitsRef.current;
+				pendingRowUnitsRef.current = 0;
+				if (!chunks.length) {
+					return;
+				}
+				setData({
+					runId: activeRunRef.current,
+					chunks,
+					rowUnits
+				});
+			});
+		};
 
 		calculateMandelbrot(
 			signal,
@@ -195,7 +266,7 @@ const MandelBrotContainer = () => {
 			panx,
 			pany,
 			zoom,
-			setData,
+			enqueueData,
 			maxIterations,
 			colorScheme
 		);
@@ -204,80 +275,25 @@ const MandelBrotContainer = () => {
 			if (!hasHydratedURL) {
 				hasHydratedURL = true;
 			} else {
-			const nextSearch = `?panx=${panx}&pany=${pany}&zoom=${zoom}&maxIterations=${maxIterations}&colorScheme=${colorScheme}`;
-			window.history.pushState(
-				{
-					panx,
-					pany,
-					zoom,
-					maxIterations,
-					colorScheme
-				},
-				'Mandelbrot',
-				`${window.location.pathname}${nextSearch}`
-			);
+				window.clearTimeout(urlStateTimeout.current);
+				urlStateTimeout.current = window.setTimeout(() => {
+					const nextSearch = `?panx=${panx}&pany=${pany}&zoom=${zoom}&maxIterations=${maxIterations}&colorScheme=${colorScheme}`;
+					window.history.pushState(
+						{
+							panx,
+							pany,
+							zoom,
+							maxIterations,
+							colorScheme
+						},
+						'Mandelbrot',
+						`${window.location.pathname}${nextSearch}`
+					);
+				}, URL_UPDATE_DEBOUNCE_MS);
 			}
 		} else {
 			handlingURLState = false;
 		}
-
-		const onMouseDown = event => {
-			if (event.button !== 0 || event.target !== canv.current) {
-				return;
-			}
-			window.clearTimeout(wheelTimeout.current);
-			pendingView.current = null;
-			resetPreview(setPreviewTransform, previewTransformRef);
-			syncPreviewCanvas(canv, previewCanv);
-			previewModeRef.current = 'interactive';
-			setPreviewVisible(true);
-			dragRef.current = {
-				active: true,
-				startX: event.pageX,
-				startY: event.pageY
-			};
-			setIsDragging(true);
-		};
-
-		const onMouseMove = event => {
-			if (!dragRef.current.active) {
-				return;
-			}
-			const translateX = event.pageX - dragRef.current.startX;
-			const translateY = event.pageY - dragRef.current.startY;
-			const nextPreviewTransform = { scale: 1, translateX, translateY };
-			previewTransformRef.current = nextPreviewTransform;
-			setPreviewTransform(nextPreviewTransform);
-		};
-
-		const onMouseUp = event => {
-			if (!dragRef.current.active) {
-				return;
-			}
-			dragRef.current.active = false;
-			setIsDragging(false);
-			const deltaX = event.pageX - dragRef.current.startX;
-			const deltaY = event.pageY - dragRef.current.startY;
-			if (deltaX === 0 && deltaY === 0) {
-				resetPreview(setPreviewTransform, previewTransformRef);
-				setPreviewVisible(false);
-				return;
-			}
-			if (controller) {
-				controller.abort();
-			}
-			invalidateNextRun(activeRunRef);
-			previewModeRef.current = 'committing';
-			bakePreviewToMainCanvas(canv, previewCanv, previewTransformRef.current);
-			syncDrawBufferFromCanvas(canv);
-			resetPreview(setPreviewTransform, previewTransformRef);
-			setPreviewVisible(false);
-			const nextView = panViewByDelta(deltaX, deltaY, viewRef.current.panx, viewRef.current.pany);
-			unstable_batchedUpdates(() => {
-				setPanx(nextView.panx);
-				setPany(nextView.pany);
-			});
-		};
 
 		const onWheel = event => {
 			event.preventDefault();
@@ -300,27 +316,14 @@ const MandelBrotContainer = () => {
 			previewModeRef.current = 'interactive';
 			const nextPreviewTransform = createPreviewTransform(viewRef.current, nextPreviewView);
 			previewTransformRef.current = nextPreviewTransform;
-			setPreviewTransform(nextPreviewTransform);
+			applyPreviewTransform(previewCanv, nextPreviewTransform);
 			window.clearTimeout(wheelTimeout.current);
 			wheelTimeout.current = window.setTimeout(() => {
 				const nextView = pendingView.current;
 				if (!nextView) {
 					return;
 				}
-				if (controller) {
-					controller.abort();
-				}
-				invalidateNextRun(activeRunRef);
-				previewModeRef.current = 'committing';
-				bakePreviewToMainCanvas(canv, previewCanv, previewTransformRef.current);
-				syncDrawBufferFromCanvas(canv);
-				resetPreview(setPreviewTransform, previewTransformRef);
-				setPreviewVisible(false);
-				unstable_batchedUpdates(() => {
-					setZoom(nextView.zoom);
-					setPanx(nextView.panx);
-					setPany(nextView.pany);
-				});
+				commitPreview(nextView);
 			}, WHEEL_DEBOUNCE_MS);
 		};
 
@@ -341,26 +344,200 @@ const MandelBrotContainer = () => {
 		};
 
 		window.addEventListener('resize', onResize);
-		window.addEventListener('mousedown', onMouseDown);
-		window.addEventListener('mousemove', onMouseMove);
-		window.addEventListener('mouseup', onMouseUp);
 		window.addEventListener('wheel', onWheel, { passive: false });
 		window.addEventListener('popstate', handleState);
+		window.visualViewport?.addEventListener('resize', onResize);
+		window.visualViewport?.addEventListener('scroll', onResize);
 		return () => {
 			window.removeEventListener('resize', onResize);
-			window.removeEventListener('mousedown', onMouseDown);
-			window.removeEventListener('mousemove', onMouseMove);
-			window.removeEventListener('mouseup', onMouseUp);
 			window.removeEventListener('wheel', onWheel);
 			window.removeEventListener('popstate', handleState);
+			window.visualViewport?.removeEventListener('resize', onResize);
+			window.visualViewport?.removeEventListener('scroll', onResize);
 			window.clearTimeout(wheelTimeout.current);
-			dragRef.current.active = false;
+			window.clearTimeout(urlStateTimeout.current);
+			if (drawFlushRef.current) {
+				window.cancelAnimationFrame(drawFlushRef.current);
+				drawFlushRef.current = 0;
+			}
 		};
 	}, [width, height, panx, pany, zoom, maxIterations, colorScheme]);
 
+	const beginPreview = () => {
+		if (controller) {
+			controller.abort();
+		}
+		invalidateNextRun(activeRunRef);
+		pendingChunksRef.current = [];
+		pendingRowUnitsRef.current = 0;
+		if (drawFlushRef.current) {
+			window.cancelAnimationFrame(drawFlushRef.current);
+			drawFlushRef.current = 0;
+		}
+		window.clearTimeout(wheelTimeout.current);
+		pendingView.current = null;
+		resetPreview(previewCanv, previewTransformRef);
+		syncPreviewCanvas(canv, previewCanv);
+		previewModeRef.current = 'interactive';
+		setPreviewVisible(true);
+	};
+
+	const commitPreview = nextView => {
+		activeGestureRef.current = 'none';
+		if (!nextView) {
+			resetPreview(previewCanv, previewTransformRef);
+			setPreviewVisible(false);
+			return;
+		}
+		previewModeRef.current = 'committing';
+		bakePreviewToMainCanvas(canv, previewCanv, previewTransformRef.current);
+		syncDrawBufferFromCanvas(canv);
+		resetPreview(previewCanv, previewTransformRef);
+		setPreviewVisible(false);
+		unstable_batchedUpdates(() => {
+			if (nextView.zoom !== undefined) {
+				setZoom(nextView.zoom);
+			}
+			setPanx(nextView.panx);
+			setPany(nextView.pany);
+		});
+	};
+
+	const commitViewport = nextView => {
+		beginPreview();
+		pendingView.current = nextView;
+		const previewFromView = viewRef.current;
+		const nextPreviewTransform = createPreviewTransform(
+			{ ...previewFromView, width, height },
+			{ ...previewFromView, width, height, ...nextView }
+		);
+		previewTransformRef.current = nextPreviewTransform;
+		applyPreviewTransform(previewCanv, nextPreviewTransform);
+		commitPreview(nextView);
+	};
+
+	const zoomFromButton = factor => {
+		const currentView = viewRef.current;
+		const centerX = width / 2;
+		const centerY = height / 2;
+		const nextView = zoomViewAtPoint(
+			centerX,
+			centerY,
+			factor,
+			currentView.width,
+			currentView.height,
+			currentView.panx,
+			currentView.pany,
+			currentView.zoom
+		);
+		commitViewport(nextView);
+	};
+
+	const resetView = () => {
+		commitViewport(defaultView());
+	};
+
+	const bind = useGesture(
+		{
+			onDragStart: ({ event, touches, cancel }) => {
+				if (touches > 1) {
+					cancel();
+					return;
+				}
+				if (event.target !== gestureSurface.current && event.target !== canv.current) {
+					return;
+				}
+				activeGestureRef.current = 'drag';
+				beginPreview();
+				setIsDragging(true);
+			},
+			onDrag: ({ active, movement: [mx, my], touches, pinching, cancel }) => {
+				if (!active) {
+					return;
+				}
+				if (touches > 1 || pinching) {
+					activeGestureRef.current = 'pinch';
+					cancel();
+					setIsDragging(false);
+					return;
+				}
+				if (activeGestureRef.current !== 'drag') {
+					return;
+				}
+				const nextPreviewTransform = { scale: 1, translateX: mx, translateY: my };
+				previewTransformRef.current = nextPreviewTransform;
+				applyPreviewTransform(previewCanv, nextPreviewTransform);
+			},
+			onDragEnd: ({ movement: [mx, my] }) => {
+				setIsDragging(false);
+				if (activeGestureRef.current !== 'drag') {
+					return;
+				}
+				if (mx === 0 && my === 0) {
+					activeGestureRef.current = 'none';
+					resetPreview(previewCanv, previewTransformRef);
+					setPreviewVisible(false);
+					return;
+				}
+				commitPreview(panViewByDelta(mx, my, viewRef.current.panx, viewRef.current.pany));
+			},
+			onPinchStart: () => {
+				activeGestureRef.current = 'pinch';
+				pinchBaselineRef.current = 0;
+				beginPreview();
+				setIsDragging(false);
+			},
+			onPinch: ({ origin: [ox, oy], movement: [movementScale], first }) => {
+				if (activeGestureRef.current !== 'pinch') {
+					return;
+				}
+				if (first) {
+					pinchBaselineRef.current = movementScale;
+				}
+				const baseView = viewRef.current;
+				const calibratedMovement = movementScale - pinchBaselineRef.current;
+				const gestureScale = 1 + calibratedMovement;
+				const damping = gestureScale >= 1 ? PINCH_ZOOM_IN_DAMPING : PINCH_ZOOM_OUT_DAMPING;
+				const dampedScale = 1 + (gestureScale - 1) * damping;
+				const nextView = zoomViewAtPoint(
+					ox,
+					oy,
+					Math.max(0.1, dampedScale),
+					baseView.width,
+					baseView.height,
+					baseView.panx,
+					baseView.pany,
+					baseView.zoom
+				);
+				pendingView.current = nextView;
+				const nextPreviewTransform = createPreviewTransform(baseView, nextView);
+				previewTransformRef.current = nextPreviewTransform;
+				applyPreviewTransform(previewCanv, nextPreviewTransform);
+			},
+			onPinchEnd: () => {
+				if (activeGestureRef.current !== 'pinch') {
+					return;
+				}
+				commitPreview(pendingView.current);
+			}
+		},
+		{
+			drag: {
+				pointer: { touch: true, capture: false },
+				filterTaps: true
+			},
+			pinch: {
+				pointer: { touch: true },
+				pinchOnWheel: false
+			},
+			eventOptions: { passive: false }
+		}
+	);
+
 	const canvasStyle = {
 		cursor: isDragging ? 'grabbing' : 'grab',
-		visibility: previewVisible ? 'hidden' : 'visible'
+		visibility: previewVisible ? 'hidden' : 'visible',
+		touchAction: 'none'
 	};
 	const previewCanvasStyle = previewVisible
 		? {
@@ -368,7 +545,7 @@ const MandelBrotContainer = () => {
 				inset: 0,
 				pointerEvents: 'none',
 				transformOrigin: '0 0',
-				transform: `matrix(${previewTransform.scale}, 0, 0, ${previewTransform.scale}, ${previewTransform.translateX}, ${previewTransform.translateY})`,
+				transform: 'matrix(1, 0, 0, 1, 0, 0)',
 				willChange: 'transform'
 			}
 		: { display: 'none' };
@@ -382,8 +559,21 @@ const MandelBrotContainer = () => {
 				setColorScheme={setColorScheme}
 				rows={rows}
 				time={time}
+				onReset={resetView}
 			/>
-			<div style={{ position: 'relative', width, height, backgroundColor: '#000' }}>
+			<div className="zoomControls">
+				<button type="button" className="zoomButton" onClick={() => zoomFromButton(1.35)}>
+					+
+				</button>
+				<button type="button" className="zoomButton" onClick={() => zoomFromButton(1 / 1.35)}>
+					-
+				</button>
+			</div>
+			<div
+				ref={gestureSurface}
+				{...bind()}
+				style={{ position: 'relative', width, height, backgroundColor: '#000', touchAction: 'none' }}
+			>
 				<canvas id="mainCanvas" ref={canv} width={width} height={height} style={canvasStyle} />
 				<canvas ref={previewCanv} width={width} height={height} style={previewCanvasStyle} />
 			</div>

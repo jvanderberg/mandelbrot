@@ -1,8 +1,11 @@
+import convert from 'color-convert';
+
 const workerUrl = new URL('./mandelbrotWorker.js', import.meta.url);
 
 let workers = [];
 let nextWorkerRequestId = 0;
 const canvasStates = new WeakMap();
+const paletteCache = new Map();
 
 export const MAX_ITERATIONS = 500;
 export const ROW_STRIDE = 16;
@@ -14,6 +17,80 @@ export const LINES_PER_WORKER_REQUEST = 4;
 
 export function wait(ms) {
 	return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function getPalette(colorScheme, maxIterations) {
+	const key = `${colorScheme}:${maxIterations}`;
+	const cached = paletteCache.get(key);
+	if (cached) {
+		return cached;
+	}
+
+	const palette = new Uint8ClampedArray((maxIterations + 1) * 4);
+	for (let iteration = 0; iteration <= maxIterations; iteration++) {
+		let rgb = [0, 0, 0];
+		if (iteration < maxIterations) {
+			if (colorScheme === 1) {
+				rgb = convert.hsl.rgb((((120 * 2 * iteration) / maxIterations) % 120) + 180, 90, 50);
+			} else if (colorScheme === 2) {
+				rgb = convert.hsl.rgb(220, 90, ((75 * 2 * iteration) / maxIterations) % 75);
+			} else {
+				rgb = convert.hsl.rgb(((360 * 2 * iteration) / maxIterations) % 360, 90, 50);
+			}
+		}
+		const index = iteration * 4;
+		palette[index] = rgb[0];
+		palette[index + 1] = rgb[1];
+		palette[index + 2] = rgb[2];
+		palette[index + 3] = 255;
+	}
+
+	paletteCache.set(key, palette);
+	return palette;
+}
+
+function renderChunkFallback(job, width, height, panx, pany, zoom, colorScheme, maxIterations) {
+	const rgba = new Uint8ClampedArray(width * job.lineCount * 4);
+	const palette = getPalette(colorScheme, maxIterations);
+	const offsetx = -width / 2;
+	const dx = 1 / zoom;
+	const lineBytes = width * 4;
+
+	for (let lineIndex = 0; lineIndex < job.lineCount; lineIndex++) {
+		const y = job.startY + lineIndex * job.lineStep;
+		const y0 = (y - height / 2 + pany) / zoom;
+		let x0 = (offsetx + panx) / zoom;
+		let rgbaOffset = lineIndex * lineBytes;
+
+		for (let x = 0; x < width; x++) {
+			let rx = 0;
+			let ry = 0;
+			let iteration = 0;
+			let rxsqr = 0;
+			let rysqr = 0;
+			while (iteration <= maxIterations && rxsqr + rysqr <= 4) {
+				ry = (rx + rx) * ry + y0;
+				rx = rxsqr - rysqr + x0;
+				rysqr = ry * ry;
+				rxsqr = rx * rx;
+				iteration++;
+			}
+
+			const paletteIndex = Math.min(iteration, maxIterations) * 4;
+			rgba[rgbaOffset++] = palette[paletteIndex];
+			rgba[rgbaOffset++] = palette[paletteIndex + 1];
+			rgba[rgbaOffset++] = palette[paletteIndex + 2];
+			rgba[rgbaOffset++] = 255;
+			x0 += dx;
+		}
+	}
+
+	return {
+		startY: job.startY,
+		lineCount: job.lineCount,
+		lineStep: job.lineStep,
+		rgba
+	};
 }
 
 function createWorker() {
@@ -178,16 +255,13 @@ async function runner(
 			.then(newData => normalizeLineBatch(newData, width, height))
 			.catch(err => {
 				console.error(err);
-				return [];
+				return [renderChunkFallback(job, width, height, panx, pany, zoom, colorSchemeIndex, maxIterations)];
 			});
 	}
 	return normalizeLineBatch(data, width, height);
 }
 
 function normalizeLineBatch(data, width, height) {
-	if (window.innerHeight !== height || window.innerWidth !== width) {
-		return [];
-	}
 	return data?.chunk ? [data.chunk] : [];
 }
 
