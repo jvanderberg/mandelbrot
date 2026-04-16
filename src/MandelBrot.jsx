@@ -2,13 +2,9 @@ import React, { useEffect, useRef, useState } from 'react';
 import { unstable_batchedUpdates } from 'react-dom';
 import {
 	MAX_ITERATIONS,
-	FIXED_WORKERS,
-	ROW_STRIDE,
-	blue2ColorScheme,
-	blueColorScheme,
 	calculateMandelbrot,
 	drawData,
-	rainbowColorScheme
+	syncDrawBufferFromCanvas
 } from './common.js';
 import { ControlPanel } from './ControlPanel.jsx';
 
@@ -113,8 +109,6 @@ function invalidateNextRun(activeRunRef) {
 	return activeRunRef.current;
 }
 
-const colorSchemes = [rainbowColorScheme, blueColorScheme, blue2ColorScheme];
-
 let start = 0;
 let rows = 0;
 let signal;
@@ -161,12 +155,10 @@ const MandelBrotContainer = () => {
 		if (data?.runId !== undefined && data.runId !== activeRunRef.current) {
 			return;
 		}
-		const pixels = data?.pixels ?? data;
-		if (pixels && Object.keys(pixels).length) {
-			rows = rows + (data?.rowUnits ?? Object.keys(pixels).length / width);
-			if (rows >= height) {
-				setTime(performance.now() - start);
-			}
+		const lines = data?.lines ?? [];
+		if (lines.length) {
+			rows = rows + (data?.rowUnits ?? lines.length);
+			setTime(performance.now() - start);
 			drawData(data, canv);
 			if (previewModeRef.current === 'committing') {
 				previewModeRef.current = 'idle';
@@ -202,7 +194,7 @@ const MandelBrotContainer = () => {
 			zoom,
 			setData,
 			maxIterations,
-			colorSchemes[colorScheme](maxIterations)
+			colorScheme
 		);
 
 		if (!handlingURLState) {
@@ -274,6 +266,7 @@ const MandelBrotContainer = () => {
 			invalidateNextRun(activeRunRef);
 			previewModeRef.current = 'committing';
 			bakePreviewToMainCanvas(canv, previewCanv, previewTransformRef.current);
+			syncDrawBufferFromCanvas(canv);
 			resetPreview(setPreviewTransform, previewTransformRef);
 			setPreviewVisible(false);
 			const nextView = panViewByDelta(deltaX, deltaY, viewRef.current.panx, viewRef.current.pany);
@@ -317,6 +310,7 @@ const MandelBrotContainer = () => {
 				invalidateNextRun(activeRunRef);
 				previewModeRef.current = 'committing';
 				bakePreviewToMainCanvas(canv, previewCanv, previewTransformRef.current);
+				syncDrawBufferFromCanvas(canv);
 				resetPreview(setPreviewTransform, previewTransformRef);
 				setPreviewVisible(false);
 				unstable_batchedUpdates(() => {
@@ -385,8 +379,6 @@ const MandelBrotContainer = () => {
 				setColorScheme={setColorScheme}
 				rows={rows}
 				time={time}
-				workerCount={FIXED_WORKERS}
-				rowStride={ROW_STRIDE}
 			/>
 			<div style={{ position: 'relative', width, height, backgroundColor: '#000' }}>
 				<canvas id="mainCanvas" ref={canv} width={width} height={height} style={canvasStyle} />

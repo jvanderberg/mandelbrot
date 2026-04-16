@@ -23,9 +23,7 @@ export const ControlPanel = ({
 	colorScheme,
 	setColorScheme,
 	rows,
-	time,
-	workerCount,
-	rowStride
+	time
 }) => (
 	<div className="controlPadding">
 		<div className="controlPanel" onClick={event => event.stopPropagation()}>
@@ -60,20 +58,8 @@ export const ControlPanel = ({
 				</span>
 			</div>
 			<div className="row">
-				<label>Renderer</label>
-				<span>Local CPU</span>
-			</div>
-			<div className="row">
-				<label>Workers/Stride</label>
-				<span>
-					{workerCount} / {rowStride}
-				</span>
-			</div>
-			<div className="row">
-				<label>Rows/Time</label>
-				<span>
-					{rows} / {(time / 10).toFixed(0) / 100}
-				</span>
+				<label>Rows/Sec</label>
+				<span>{time > 0 ? ((rows * 1000) / time).toFixed(0) : 0}</span>
 			</div>
 			<div className="row">
 				<a onClick={() => dlCanvas()} id="download" href="blank">

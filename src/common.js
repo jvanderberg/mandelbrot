@@ -1,12 +1,16 @@
-import convert from 'color-convert';
 const workerUrl = new URL('./mandelbrotWorker.js', import.meta.url);
 
 let workers = [];
 let nextWorkerRequestId = 0;
+const canvasStates = new WeakMap();
 
 export const MAX_ITERATIONS = 500;
-export const FIXED_WORKERS = 32;
 export const ROW_STRIDE = 16;
+export const FIXED_WORKERS = Math.max(
+	1,
+	Math.min(ROW_STRIDE, Math.max(1, (globalThis.navigator?.hardwareConcurrency ?? 8) - 1))
+);
+export const LINES_PER_WORKER_REQUEST = 4;
 
 export function wait(ms) {
 	return new Promise(resolve => setTimeout(resolve, ms));
@@ -86,40 +90,6 @@ export const workerWrapper = worker => {
 		});
 };
 
-export const rainbowColorScheme = maxIterations => {
-	const cacheColors = [];
-	return data => {
-		if (cacheColors[data]) return cacheColors[data];
-		const rgb =
-			data < maxIterations ? convert.hsl.rgb(((360 * 2 * data) / maxIterations) % 360, 90, 50) : [0, 0, 0];
-		cacheColors[data] = rgb;
-		return rgb;
-	};
-};
-
-export const blueColorScheme = maxIterations => {
-	const cacheColors = [];
-	return data => {
-		if (cacheColors[data]) return cacheColors[data];
-		const rgb =
-			data < maxIterations
-				? convert.hsl.rgb((((120 * 2 * data) / maxIterations) % 120) + 180, 90, 50)
-				: [0, 0, 0];
-		cacheColors[data] = rgb;
-		return rgb;
-	};
-};
-
-export const blue2ColorScheme = maxIterations => {
-	const cacheColors = [];
-	return data => {
-		if (cacheColors[data]) return cacheColors[data];
-		const rgb = data < maxIterations ? convert.hsl.rgb(220, 90, ((75 * 2 * data) / maxIterations) % 75) : [0, 0, 0];
-		cacheColors[data] = rgb;
-		return rgb;
-	};
-};
-
 export const calculateMandelbrot = async (
 	signal,
 	runId,
@@ -130,23 +100,28 @@ export const calculateMandelbrot = async (
 	zoom,
 	setData,
 	maxIterations = MAX_ITERATIONS,
-	colorScheme = () => [0, 0, 0]
+	colorScheme = 0
 ) => {
 	const workerFns = ensureWorkers().map(workerWrapper);
 
 	for (let phase = 0; phase < ROW_STRIDE; phase++) {
 		const rowJobs = [];
 		for (let y = phase; y < height; y += ROW_STRIDE) {
-			rowJobs.push({ y });
+			rowJobs.push(y);
 		}
 
-		for (let i = 0; i < rowJobs.length; i += FIXED_WORKERS) {
-			const batch = rowJobs.slice(i, i + FIXED_WORKERS);
+		const jobs = [];
+		for (let i = 0; i < rowJobs.length; i += LINES_PER_WORKER_REQUEST) {
+			jobs.push({ ys: rowJobs.slice(i, i + LINES_PER_WORKER_REQUEST) });
+		}
+
+		for (let i = 0; i < jobs.length; i += FIXED_WORKERS) {
+			const batch = jobs.slice(i, i + FIXED_WORKERS);
 			const batchResults = await Promise.all(
 				batch.map((job, index) =>
 					runner(
 						signal,
-						job.y,
+						job.ys,
 						width,
 						workerFns[index],
 						height,
@@ -161,16 +136,10 @@ export const calculateMandelbrot = async (
 			if (signal.aborted) {
 				return;
 			}
-			const batchPixels = [];
-			for (const linePixels of batchResults) {
-				for (const pixelIndex in linePixels) {
-					batchPixels[pixelIndex] = linePixels[pixelIndex];
-				}
-			}
 			setData({
 				runId,
-				pixels: batchPixels,
-				rowUnits: batchResults.length
+				lines: batchResults.flat(),
+				rowUnits: batch.reduce((count, job) => count + job.ys.length, 0)
 			});
 			await wait(0);
 		}
@@ -179,67 +148,82 @@ export const calculateMandelbrot = async (
 
 async function runner(
 	signal,
-	y,
+	ys,
 	width,
 	worker,
 	height,
 	panx,
 	pany,
 	zoom,
-	colorScheme,
+	colorSchemeIndex,
 	maxIterations = MAX_ITERATIONS
 ) {
 	const data = worker({
-		y,
+		ys,
 		width,
 		offsetx: -width / 2,
 		offsety: -height / 2,
 		panx,
 		pany,
 		zoom,
-		maxIterations
+		maxIterations,
+		colorScheme: colorSchemeIndex
 	});
 
 	if (data.then && typeof data.then === 'function') {
-		return data
-			.then(newData => mapLineToRgb(newData, colorScheme, maxIterations, width, height))
-			.catch(err => console.log(err));
+		return data.then(newData => normalizeLineBatch(newData, width, height)).catch(err => console.log(err));
 	}
-	return mapLineToRgb(data, colorScheme, maxIterations, width, height);
+	return normalizeLineBatch(data, width, height);
 }
 
-function mapLineToRgb(data, colorScheme, maxIterations, width, height) {
+function normalizeLineBatch(data, width, height) {
 	if (window.innerHeight !== height || window.innerWidth !== width) {
 		return [];
 	}
-	const rgb = [];
-	if (data?.iterations && data.y !== undefined) {
-		const start = data.y * width;
-		for (let x = 0; x < data.iterations.length; x++) {
-			rgb[start + x] = colorScheme(data.iterations[x], maxIterations);
+	return data?.lines ?? [];
+}
+
+function getCanvasState(canvasRef) {
+	const canvas = canvasRef.current;
+	let state = canvasStates.get(canvas);
+	if (!state || state.width !== canvas.width || state.height !== canvas.height) {
+		const context = canvas.getContext('2d', { alpha: false });
+		const imageData = context.createImageData(canvas.width, canvas.height);
+		for (let i = 3; i < imageData.data.length; i += 4) {
+			imageData.data[i] = 255;
 		}
-		return rgb;
+		state = {
+			context,
+			imageData,
+			width: canvas.width,
+			height: canvas.height
+		};
+		canvasStates.set(canvas, state);
 	}
-	for (const i in data) {
-		rgb[i] = colorScheme(data[i], maxIterations);
+	return state;
+}
+
+export function syncDrawBufferFromCanvas(canvasRef) {
+	const canvas = canvasRef.current;
+	if (!canvas) {
+		return;
 	}
-	return rgb;
+	const context = canvas.getContext('2d', { alpha: false });
+	const state = {
+		context,
+		imageData: context.getImageData(0, 0, canvas.width, canvas.height),
+		width: canvas.width,
+		height: canvas.height
+	};
+	canvasStates.set(canvas, state);
 }
 
 export function drawData(data, canvas) {
-	const pixels = data.pixels ?? data;
-	const context = canvas.current.getContext('2d', { alpha: false });
+	const lines = data.lines ?? [];
+	const { context, imageData } = getCanvasState(canvas);
 	context.imageSmoothingEnabled = false;
-	const imagew = canvas.current.width;
-	const imageh = canvas.current.height;
-	const imagedata = context.getImageData(0, 0, imagew, imageh);
-	for (const i in pixels) {
-		let index = Number(i) * 4;
-		const [r, g, b] = pixels[i];
-		imagedata.data[index++] = r;
-		imagedata.data[index++] = g;
-		imagedata.data[index++] = b;
-		imagedata.data[index++] = 255;
+	for (const line of lines) {
+		imageData.data.set(line.rgba, line.y * imageData.width * 4);
 	}
-	context.putImageData(imagedata, 0, 0);
+	context.putImageData(imageData, 0, 0);
 }
